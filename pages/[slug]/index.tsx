@@ -10,13 +10,13 @@ import { z } from 'zod';
 import type { GetServerSideProps } from 'next';
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
-import { clientExists } from '@/lib/clients';
+import { slugIsAcceptable } from '@/lib/clients';
 import RecentRecords from '@/components/RecentRecords';
 
 // Importa scanner apenas no cliente (sem SSR)
 const BarcodeScanner = dynamic(() => import('@/components/BarcodeScanner'), { ssr: false });
 
-// ─── Schema do formulário ─────────────────────────────────────────────────────
+// --- Schema do formulário -----------------------------------------------------
 const formSchema = z.object({
   barcode: z.string().min(1, 'Código de barras obrigatório'),
   itemName: z.string().min(1, 'Nome do item obrigatório').max(200),
@@ -76,7 +76,7 @@ export default function ClientPage({ slug }: Props) {
 
   const barcodeValue = watch('barcode');
 
-  // ─── Consulta COSMOS ───────────────────────────────────────────────────────
+  // --- Consulta COSMOS -------------------------------------------------------
   const consultCosmos = useCallback(
     async (code: string) => {
       if (!code || code.length < 4) return;
@@ -129,7 +129,7 @@ export default function ClientPage({ slug }: Props) {
     };
   }, [barcodeValue, consultCosmos]);
 
-  // ─── Leitura de câmera ─────────────────────────────────────────────────────
+  // --- Leitura de câmera -----------------------------------------------------
   const handleBarcodeDetected = useCallback(
     (code: string) => {
       setScannerActive(false);
@@ -139,7 +139,7 @@ export default function ClientPage({ slug }: Props) {
     [setValue, consultCosmos]
   );
 
-  // ─── Submissão ─────────────────────────────────────────────────────────────
+  // --- Submissão -------------------------------------------------------------
   const onSubmit = async (data: FormData) => {
     if (submitting) return;
     setSubmitting(true);
@@ -157,7 +157,7 @@ export default function ClientPage({ slug }: Props) {
       const result = await res.json();
 
       if (res.ok) {
-        setSubmitStatus({ type: 'success', message: '✓ Produto cadastrado com sucesso!' });
+        setSubmitStatus({ type: 'success', message: '? Produto cadastrado com sucesso!' });
         reset();
         setCosmosResult(null);
         setScannerActive(false);
@@ -177,7 +177,7 @@ export default function ClientPage({ slug }: Props) {
     }
   };
 
-  // ─── Limpar formulário ─────────────────────────────────────────────────────
+  // --- Limpar formulário -----------------------------------------------------
   const handleClear = () => {
     reset();
     setCosmosResult(null);
@@ -186,7 +186,7 @@ export default function ClientPage({ slug }: Props) {
     setFocus('barcode');
   };
 
-  // ─── Registros recentes ────────────────────────────────────────────────────
+  // --- Registros recentes ----------------------------------------------------
   const loadRecentRecords = useCallback(async () => {
     setRecentLoading(true);
     try {
@@ -205,7 +205,7 @@ export default function ClientPage({ slug }: Props) {
     setShowRecent((v) => !v);
   };
 
-  // ─── Registra o ref do campo itemName para foco programático ──────────────
+  // --- Registra o ref do campo itemName para foco programático --------------
   const { ref: itemNameFormRef, ...itemNameRest } = register('itemName');
   const { ref: saleValueFormRef, ...saleValueRest } = register('saleValue');
 
@@ -220,7 +220,7 @@ export default function ClientPage({ slug }: Props) {
       <div className="app-wrapper">
         {/* HEADER */}
         <header className="app-header">
-          <div className="app-logo">▌▌</div>
+          <div className="app-logo">¦¦</div>
           <div>
             <div className="app-title">Cadastro de Produtos</div>
             <div className="app-client-name">{slug}</div>
@@ -231,7 +231,7 @@ export default function ClientPage({ slug }: Props) {
         {submitStatus && (
           <div className={`alert alert-${submitStatus.type}`}>
             <span className="alert-icon">
-              {submitStatus.type === 'success' ? '✓' : '✕'}
+              {submitStatus.type === 'success' ? '?' : '?'}
             </span>
             <span>{submitStatus.message}</span>
           </div>
@@ -268,11 +268,11 @@ export default function ClientPage({ slug }: Props) {
                   onClick={() => setScannerActive((v) => !v)}
                   aria-label="Alternar câmera"
                 >
-                  {scannerActive ? '✕' : '📷'}
+                  {scannerActive ? '?' : '??'}
                 </button>
               </div>
               {errors.barcode && (
-                <p className="field-error">⚠ {errors.barcode.message}</p>
+                <p className="field-error">? {errors.barcode.message}</p>
               )}
             </div>
 
@@ -286,7 +286,7 @@ export default function ClientPage({ slug }: Props) {
 
             {cosmosResult?.found && cosmosResult.name && (
               <div className="product-found">
-                <span className="product-found-icon">✓</span>
+                <span className="product-found-icon">?</span>
                 <div>
                   <div className="product-found-name">{cosmosResult.name}</div>
                   <div className="product-found-sub">Produto encontrado via COSMOS</div>
@@ -296,7 +296,7 @@ export default function ClientPage({ slug }: Props) {
 
             {cosmosResult && !cosmosResult.found && barcodeValue && (
               <div className="product-not-found">
-                <span className="product-not-found-icon">⚠</span>
+                <span className="product-not-found-icon">?</span>
                 <div className="product-not-found-text">
                   Código não encontrado no COSMOS. Informe o nome manualmente abaixo.
                 </div>
@@ -333,7 +333,7 @@ export default function ClientPage({ slug }: Props) {
                 readOnly={cosmosResult?.found === true}
               />
               {errors.itemName && (
-                <p className="field-error">⚠ {errors.itemName.message}</p>
+                <p className="field-error">? {errors.itemName.message}</p>
               )}
             </div>
           </div>
@@ -357,7 +357,7 @@ export default function ClientPage({ slug }: Props) {
                 autoComplete="off"
               />
               {errors.saleValue && (
-                <p className="field-error">⚠ {errors.saleValue.message}</p>
+                <p className="field-error">? {errors.saleValue.message}</p>
               )}
             </div>
 
@@ -411,7 +411,7 @@ export default function ClientPage({ slug }: Props) {
                 padding: 0,
               }}
             >
-              {showRecent ? '▾' : '▸'} Últimos cadastros
+              {showRecent ? '?' : '?'} Últimos cadastros
             </button>
           </div>
 
@@ -424,10 +424,9 @@ export default function ClientPage({ slug }: Props) {
   );
 }
 
-// ─── Server-side: valida se o slug tem formato válido ────────────────────────
+// --- Server-side: valida se o slug tem formato válido ------------------------
 export const getServerSideProps: GetServerSideProps = async ({ params }) => {
   const slug = params?.slug as string;
-  const { slugIsAcceptable } = await import('@/lib/clients');
 
   if (!slugIsAcceptable(slug)) {
     return { notFound: true };
