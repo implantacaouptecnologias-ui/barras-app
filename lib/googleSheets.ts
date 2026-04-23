@@ -13,6 +13,7 @@ const HEADERS = [
   'slug_cliente',
   'origem_nome',
   'tipo_unidade',
+  'ncm',
 ];
 
 function getSheetsClient(): sheets_v4.Sheets {
@@ -96,6 +97,7 @@ export interface SaveRecordParams {
   clientSlug: string;
   nameSource: 'cosmos' | 'manual';
   unitType?: 'kg' | 'un';
+  ncm?: string;
 }
 
 export async function saveRecord(params: SaveRecordParams): Promise<void> {
@@ -122,6 +124,7 @@ export async function saveRecord(params: SaveRecordParams): Promise<void> {
     params.clientSlug,
     params.nameSource,
     unitLabel,
+    params.ncm || '',
   ];
 
   await sheets.spreadsheets.values.append({

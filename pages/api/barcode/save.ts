@@ -37,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: firstError.message });
   }
 
-  const { barcode, itemName, saleValue, nameSource, unitType } = parsed.data;
+  const { barcode, itemName, saleValue, nameSource, unitType, ncm } = parsed.data;
 
   const numericValue = parseMonetaryValue(saleValue);
   if (isNaN(numericValue) || numericValue <= 0) {
@@ -66,6 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       clientSlug: slug,
       nameSource,
       unitType,
+      ncm,
     });
 
     return res.status(200).json({ success: true, message: 'Produto cadastrado com sucesso!' });

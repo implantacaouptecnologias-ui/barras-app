@@ -12,6 +12,7 @@ type Step = 'barcode' | 'name' | 'price';
 interface CosmosResult {
   found: boolean;
   name?: string;
+  ncm?: string;
 }
 
 interface RecentRecord {
@@ -182,7 +183,7 @@ export default function ClientPage({ slug }: Props) {
       const res = await fetch(`/api/barcode/save?slug=${slug}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ barcode, itemName, saleValue, nameSource, unitType: unitType ?? undefined }),
+        body: JSON.stringify({ barcode, itemName, saleValue, nameSource, unitType: unitType ?? undefined, ncm: cosmosResult?.ncm }),
       });
       const result = await res.json();
 
@@ -316,7 +317,7 @@ export default function ClientPage({ slug }: Props) {
                   className={`input${barcodeError ? ' input-error' : ''}`}
                   value={barcode}
                   onChange={e => {
-                    const onlyDigits = e.target.value.replace(/\D/g, '');
+                    const onlyDigits = e.target.value.replace(/\D/g, '').slice(0, 13);
                     setBarcode(onlyDigits);
                     setBarcodeSource('manual');
                     setBarcodeError('');
@@ -327,6 +328,7 @@ export default function ClientPage({ slug }: Props) {
                   placeholder="Ex: 7891234567890"
                   autoComplete="off"
                   inputMode="numeric"
+                  maxLength={13}
                   autoFocus
                 />
                 <button
@@ -404,6 +406,7 @@ export default function ClientPage({ slug }: Props) {
                 value={itemName}
                 onChange={e => { setItemName(e.target.value); setNameError(''); }}
                 placeholder="Digite o nome do produto"
+                maxLength={60}
                 autoComplete="off"
                 onKeyDown={e => { if (e.key === 'Enter') handleNameNext(); }}
               />

@@ -14,7 +14,7 @@ import { google, sheets_v4 } from 'googleapis';
 
 const REGISTRY_TAB = 'Clientes';
 const REGISTRY_HEADERS = ['slug', 'spreadsheet_id', 'tab_name', 'criado_em'];
-const DATA_HEADERS = ['codigo_barras', 'nome_item', 'valor_venda', 'data_hora', 'slug_cliente', 'origem_nome', 'tipo_unidade'];
+const DATA_HEADERS = ['codigo_barras', 'nome_item', 'valor_venda', 'data_hora', 'slug_cliente', 'origem_nome', 'tipo_unidade', 'ncm'];
 
 export interface ClientSheet {
   spreadsheetId: string;

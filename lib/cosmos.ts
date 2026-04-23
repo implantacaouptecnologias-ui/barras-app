@@ -13,6 +13,7 @@ export interface CosmosProduct {
   brand?: string;
   description?: string;
   thumbnail?: string;
+  ncm?: string;
 }
 
 /**
@@ -83,6 +84,7 @@ export async function lookupProduct(barcode: string): Promise<CosmosProduct> {
       brand: data?.brand?.name || data?.brand || undefined,
       description: data?.description || undefined,
       thumbnail: data?.thumbnail || undefined,
+      ncm: data?.ncm?.code ? String(data.ncm.code) : undefined,
     };
   } catch (err: unknown) {
     clearTimeout(timeout);

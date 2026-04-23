@@ -31,7 +31,7 @@ export const saveProductSchema = z.object({
   itemName: z
     .string()
     .min(1, 'Nome do item obrigatório')
-    .max(200, 'Nome muito longo')
+    .max(60, 'Nome muito longo')
     .transform((v) => v.replace(/[\x00-\x1F\x7F]/g, '').trim()),
 
   saleValue: z
@@ -44,6 +44,7 @@ export const saveProductSchema = z.object({
 
   nameSource: z.enum(['cosmos', 'manual']),
   unitType: z.enum(['kg', 'un']).optional(),
+  ncm: z.string().max(20).optional(),
 });
 
 export type SaveProductInput = z.infer<typeof saveProductSchema>;
