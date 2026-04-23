@@ -95,6 +95,7 @@ export default function ClientPage({ slug }: Props) {
   const handleBarcodeNext = useCallback(async () => {
     if (!barcode.trim()) { setBarcodeError('Informe o código de barras'); return; }
     setBarcodeError('');
+    setScannerActive(false);
 
     // Resultado cosmos já em cache (usuário voltou) — apenas avança
     if (cosmosResult !== null) { advanceFromCosmos(cosmosResult); return; }
@@ -526,9 +527,9 @@ export default function ClientPage({ slug }: Props) {
               type="button"
               onClick={toggleRecent}
               style={{
-                background: 'none', border: 'none', color: 'var(--text-dim)',
-                fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 500,
-                letterSpacing: '0.12em', textTransform: 'uppercase', cursor: 'pointer', padding: 0,
+                background: 'none', border: 'none', color: 'var(--text)',
+                fontFamily: 'var(--sans)', fontSize: '13px', fontWeight: 700,
+                letterSpacing: '0.10em', textTransform: 'uppercase', cursor: 'pointer', padding: 0,
               }}
             >
               {showRecent ? '▲' : '▼'} Últimos cadastros
