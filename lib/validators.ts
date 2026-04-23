@@ -24,14 +24,15 @@ export function formatValue(value: number): string {
 export const saveProductSchema = z.object({
   barcode: z
     .string()
+    .trim()
     .min(1, 'Código de barras obrigatório')
-    .transform((v) => v.replace(/\s+/g, '').trim()),
+    .regex(/^\d+$/, 'Código de barras deve conter apenas dígitos'),
 
   itemName: z
     .string()
     .min(1, 'Nome do item obrigatório')
     .max(200, 'Nome muito longo')
-    .transform((v) => v.trim()),
+    .transform((v) => v.replace(/[\x00-\x1F\x7F]/g, '').trim()),
 
   saleValue: z
     .string()
@@ -42,6 +43,7 @@ export const saveProductSchema = z.object({
     }, 'Valor de venda inválido'),
 
   nameSource: z.enum(['cosmos', 'manual']),
+  unitType: z.enum(['kg', 'un']).optional(),
 });
 
 export type SaveProductInput = z.infer<typeof saveProductSchema>;

@@ -5,7 +5,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { resolveClientSpreadsheetId, isValidSlug } from '@/lib/clients';
+import { isValidSlug } from '@/lib/clients';
 import { getRecentRecords } from '@/lib/googleSheets';
 import { isRateLimited } from '@/lib/rateLimit';
 
@@ -30,14 +30,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Usa getSpreadsheetIdForSlug (sem criar) para evitar criar planilha só por ver o histórico
     const { getSpreadsheetIdForSlug } = await import('@/lib/registry');
-    const spreadsheetId = await getSpreadsheetIdForSlug(slug);
-    if (!spreadsheetId) {
+    const client = await getSpreadsheetIdForSlug(slug);
+    if (!client) {
       return res.status(200).json({ records: [] });
     }
 
-    const records = await getRecentRecords(spreadsheetId, 15);
+    const records = await getRecentRecords(client.spreadsheetId, 15, client.tabName);
     return res.status(200).json({ records });
   } catch (err) {
     console.error('[api/barcode/recent]', err);

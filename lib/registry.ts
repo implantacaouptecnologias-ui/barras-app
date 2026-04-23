@@ -1,29 +1,29 @@
 /**
- * Registry de clientes auto-provisionado via Google Sheets.
+ * Registry de clientes — planilha mestra no Google Sheets.
  *
- * Como funciona:
- * - Uma planilha "mestra" (REGISTRY_SPREADSHEET_ID) registra todos os clientes e suas planilhas.
- * - Quando um slug novo é acessado, o sistema:
- *   1. Cria uma nova planilha no Google Drive para aquele cliente
- *   2. Registra o slug e o spreadsheetId na planilha mestra
- *   3. A partir daí, acessa normalmente
+ * Abordagem: uma única planilha de dados com uma aba (tab) por cliente.
+ * Nenhum arquivo novo é criado no Drive, eliminando problemas de quota.
  *
- * Variável necessária:
- *   REGISTRY_SPREADSHEET_ID — ID da planilha mestra (criada manualmente uma vez)
- *
- * Cache em memória evita chamadas repetidas à API para slugs já conhecidos.
+ * Variáveis necessárias:
+ *   REGISTRY_SPREADSHEET_ID — planilha mestra (índice de clientes)
+ *   DATA_SPREADSHEET_ID     — planilha de dados (abas por cliente)
+ *                             Se omitida, usa a mesma que REGISTRY_SPREADSHEET_ID.
  */
 
-import { google, sheets_v4, drive_v3 } from 'googleapis';
+import { google, sheets_v4 } from 'googleapis';
 
 const REGISTRY_TAB = 'Clientes';
-const REGISTRY_HEADERS = ['slug', 'spreadsheet_id', 'spreadsheet_url', 'criado_em'];
+const REGISTRY_HEADERS = ['slug', 'spreadsheet_id', 'tab_name', 'criado_em'];
+const DATA_HEADERS = ['codigo_barras', 'nome_item', 'valor_venda', 'data_hora', 'slug_cliente', 'origem_nome', 'tipo_unidade'];
 
-// Cache em memória: slug -> spreadsheetId
-// Evita bater na planilha mestra a cada request
-const cache = new Map<string, string>();
+export interface ClientSheet {
+  spreadsheetId: string;
+  tabName: string;
+}
+
+const cache = new Map<string, ClientSheet>();
 let cacheLoadedAt = 0;
-const CACHE_TTL_MS = 60 * 1000; // 1 minuto
+const CACHE_TTL_MS = 60 * 1000;
 
 function getAuth() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -31,10 +31,7 @@ function getAuth() {
   const credentials = JSON.parse(raw);
   return new google.auth.GoogleAuth({
     credentials,
-    scopes: [
-      'https://www.googleapis.com/auth/spreadsheets',
-      'https://www.googleapis.com/auth/drive',
-    ],
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
 }
 
@@ -42,13 +39,12 @@ function getSheetsClient(): sheets_v4.Sheets {
   return google.sheets({ version: 'v4', auth: getAuth() });
 }
 
-function getDriveClient(): drive_v3.Drive {
-  return google.drive({ version: 'v3', auth: getAuth() });
+function getDataSpreadsheetId(): string {
+  const id = process.env.DATA_SPREADSHEET_ID ?? process.env.REGISTRY_SPREADSHEET_ID;
+  if (!id) throw new Error('DATA_SPREADSHEET_ID ou REGISTRY_SPREADSHEET_ID não configurado.');
+  return id;
 }
 
-/**
- * Garante que a planilha mestra existe e tem cabeçalhos.
- */
 async function ensureRegistryReady(sheets: sheets_v4.Sheets): Promise<void> {
   const registryId = process.env.REGISTRY_SPREADSHEET_ID;
   if (!registryId) throw new Error('REGISTRY_SPREADSHEET_ID não configurado.');
@@ -68,7 +64,6 @@ async function ensureRegistryReady(sheets: sheets_v4.Sheets): Promise<void> {
     }
   } catch (err: unknown) {
     const error = err as { code?: number };
-    // Aba não existe — cria
     if (error?.code === 400 || error?.code === 404) {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: registryId,
@@ -88,9 +83,6 @@ async function ensureRegistryReady(sheets: sheets_v4.Sheets): Promise<void> {
   }
 }
 
-/**
- * Carrega todos os clientes da planilha mestra para o cache.
- */
 async function loadRegistryIntoCache(): Promise<void> {
   const registryId = process.env.REGISTRY_SPREADSHEET_ID;
   if (!registryId) return;
@@ -106,95 +98,50 @@ async function loadRegistryIntoCache(): Promise<void> {
   const rows = res.data.values ?? [];
   cache.clear();
 
-  // Pula header (linha 0)
   for (const row of rows.slice(1)) {
     const slug = String(row[0] ?? '').trim();
-    const id = String(row[1] ?? '').trim();
-    if (slug && id) cache.set(slug, id);
+    const spreadsheetId = String(row[1] ?? '').trim();
+    const tabName = String(row[2] ?? '').trim();
+    if (slug && spreadsheetId && tabName) {
+      cache.set(slug, { spreadsheetId, tabName });
+    }
   }
 
   cacheLoadedAt = Date.now();
 }
 
-/**
- * Retorna o spreadsheetId para um slug, consultando o cache ou a planilha mestra.
- * Retorna null se não encontrado.
- */
-export async function getSpreadsheetIdForSlug(slug: string): Promise<string | null> {
-  // Verifica cache (com TTL)
+export async function getSpreadsheetIdForSlug(slug: string): Promise<ClientSheet | null> {
   const now = Date.now();
   if (cache.has(slug) && now - cacheLoadedAt < CACHE_TTL_MS) {
     return cache.get(slug)!;
   }
 
-  // Recarrega cache da planilha mestra
   await loadRegistryIntoCache();
-
   return cache.get(slug) ?? null;
 }
 
-/**
- * Cria uma nova planilha para o cliente e registra na planilha mestra.
- * Retorna o spreadsheetId da nova planilha.
- */
-export async function provisionClientSpreadsheet(slug: string): Promise<string> {
-  const drive = getDriveClient();
+export async function provisionClientSpreadsheet(slug: string): Promise<ClientSheet> {
   const sheets = getSheetsClient();
+  const dataSpreadsheetId = getDataSpreadsheetId();
+  const registryId = process.env.REGISTRY_SPREADSHEET_ID!;
 
-  const registryId = process.env.REGISTRY_SPREADSHEET_ID;
-  if (!registryId) throw new Error('REGISTRY_SPREADSHEET_ID não configurado.');
+  // Slug já é alfanumérico com hifens/underscores — válido como nome de aba
+  const tabName = slug;
 
-  // Obtém o folderId onde criar (opcional)
-  const folderId = process.env.DRIVE_FOLDER_ID ?? undefined;
-
-  // 1. Cria a planilha no Drive
-  const createRes = await drive.files.create({
-    requestBody: {
-      name: `BarrasApp — ${slug}`,
-      mimeType: 'application/vnd.google-apps.spreadsheet',
-      ...(folderId ? { parents: [folderId] } : {}),
-    },
-    fields: 'id, webViewLink',
-  });
-
-  const newSpreadsheetId = createRes.data.id!;
-  const newSpreadsheetUrl = createRes.data.webViewLink ?? '';
-
-  // 2. Cria a aba "Cadastros" com cabeçalhos na nova planilha
-  const SHEET_TAB = process.env.SHEET_TAB_NAME || 'Cadastros';
-  const HEADERS = [
-    'codigo_barras',
-    'nome_item',
-    'valor_venda',
-    'data_hora',
-    'slug_cliente',
-    'origem_nome',
-  ];
-
-  // Renomeia a aba padrão "Plan1" para o nome configurado
-  const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: newSpreadsheetId });
-  const defaultSheetId = sheetMeta.data.sheets?.[0]?.properties?.sheetId ?? 0;
-
+  // 1. Cria a aba do cliente na planilha de dados
   await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: newSpreadsheetId,
+    spreadsheetId: dataSpreadsheetId,
     requestBody: {
-      requests: [
-        {
-          updateSheetProperties: {
-            properties: { sheetId: defaultSheetId, title: SHEET_TAB },
-            fields: 'title',
-          },
-        },
-      ],
+      requests: [{ addSheet: { properties: { title: tabName } } }],
     },
   });
 
-  // Insere cabeçalhos
+  // 2. Insere cabeçalhos na nova aba
   await sheets.spreadsheets.values.update({
-    spreadsheetId: newSpreadsheetId,
-    range: `${SHEET_TAB}!A1`,
+    spreadsheetId: dataSpreadsheetId,
+    range: `${tabName}!A1`,
     valueInputOption: 'RAW',
-    requestBody: { values: [HEADERS] },
+    requestBody: { values: [DATA_HEADERS] },
   });
 
   // 3. Registra na planilha mestra
@@ -214,38 +161,24 @@ export async function provisionClientSpreadsheet(slug: string): Promise<string> 
     range: `${REGISTRY_TAB}!A:D`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
-    requestBody: {
-      values: [[slug, newSpreadsheetId, newSpreadsheetUrl, now]],
-    },
+    requestBody: { values: [[slug, dataSpreadsheetId, tabName, now]] },
   });
 
-  // 4. Atualiza cache
-  cache.set(slug, newSpreadsheetId);
+  const clientSheet: ClientSheet = { spreadsheetId: dataSpreadsheetId, tabName };
+  cache.set(slug, clientSheet);
 
-  console.log(`[registry] Nova planilha criada para "${slug}": ${newSpreadsheetId}`);
-  return newSpreadsheetId;
+  console.log(`[registry] Nova aba criada para "${slug}" em ${dataSpreadsheetId}`);
+  return clientSheet;
 }
 
-/**
- * Retorna o spreadsheetId para um slug.
- * Se o slug não existir, cria automaticamente a planilha e registra.
- * Esta é a função principal usada pelas rotas da API.
- */
-export async function resolveOrCreateClient(slug: string): Promise<string> {
-  // Tenta encontrar no registry
+export async function resolveOrCreateClient(slug: string): Promise<ClientSheet> {
   const existing = await getSpreadsheetIdForSlug(slug);
   if (existing) return existing;
-
-  // Não existe — provisiona automaticamente
   return provisionClientSpreadsheet(slug);
 }
 
-/**
- * Retorna todos os clientes registrados.
- * Útil para uma eventual página de administração.
- */
 export async function listAllClients(): Promise<
-  { slug: string; spreadsheetId: string; url: string; createdAt: string }[]
+  { slug: string; spreadsheetId: string; tabName: string; createdAt: string }[]
 > {
   await loadRegistryIntoCache();
 
@@ -262,7 +195,7 @@ export async function listAllClients(): Promise<
   return rows.slice(1).map((row) => ({
     slug: String(row[0] ?? ''),
     spreadsheetId: String(row[1] ?? ''),
-    url: String(row[2] ?? ''),
+    tabName: String(row[2] ?? ''),
     createdAt: String(row[3] ?? ''),
   }));
 }

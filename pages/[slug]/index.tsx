@@ -1,35 +1,13 @@
-/**
- * Página principal por cliente: /{slug}
- * Toda a lógica do formulário de cadastro de código de barras.
- */
-
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
 import type { GetServerSideProps } from 'next';
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import { slugIsAcceptable } from '@/lib/clients';
 import RecentRecords from '@/components/RecentRecords';
 
-// Importa scanner apenas no cliente (sem SSR)
 const BarcodeScanner = dynamic(() => import('@/components/BarcodeScanner'), { ssr: false });
 
-// --- Schema do formulário -----------------------------------------------------
-const formSchema = z.object({
-  barcode: z.string().min(1, 'Código de barras obrigatório'),
-  itemName: z.string().min(1, 'Nome do item obrigatório').max(200),
-  saleValue: z
-    .string()
-    .min(1, 'Valor de venda obrigatório')
-    .refine((v) => {
-      const n = parseFloat(v.replace(',', '.').replace(/[^\d.]/g, ''));
-      return !isNaN(n) && n > 0;
-    }, 'Valor inválido (ex: 29,90)'),
-});
-
-type FormData = z.infer<typeof formSchema>;
+type Step = 'barcode' | 'name' | 'price';
 
 interface CosmosResult {
   found: boolean;
@@ -44,129 +22,184 @@ interface RecentRecord {
   origem_nome: string;
 }
 
-interface Props {
-  slug: string;
-}
+interface Props { slug: string; }
+
+const STEP_INDEX: Record<Step, number> = { barcode: 0, name: 1, price: 2 };
 
 export default function ClientPage({ slug }: Props) {
+  const [step, setStep] = useState<Step>('barcode');
+
+  const [barcode, setBarcode] = useState('');
+  const [barcodeSource, setBarcodeSource] = useState<'manual' | 'scan'>('manual');
+  const [itemName, setItemName] = useState('');
+  const [saleValue, setSaleValue] = useState('');
+  const [nameSource, setNameSource] = useState<'cosmos' | 'manual'>('manual');
+  const [unitType, setUnitType] = useState<'kg' | 'un' | null>(null);
+  const [unitTypeError, setUnitTypeError] = useState('');
+
+  const [barcodeError, setBarcodeError] = useState('');
+  const [nameError, setNameError] = useState('');
+  const [valueError, setValueError] = useState('');
+  const [scannerTimedOut, setScannerTimedOut] = useState(false);
+
   const [scannerActive, setScannerActive] = useState(false);
   const [consulting, setConsulting] = useState(false);
   const [cosmosResult, setCosmosResult] = useState<CosmosResult | null>(null);
   const [submitStatus, setSubmitStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
   const [showRecent, setShowRecent] = useState(false);
   const [recentRecords, setRecentRecords] = useState<RecentRecord[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
-  const consultDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const itemNameRef = useRef<HTMLInputElement>(null);
-  const saleValueRef = useRef<HTMLInputElement>(null);
 
-  const {
-    register,
-    handleSubmit,
-    setValue,
-    watch,
-    reset,
-    setFocus,
-    formState: { errors },
-  } = useForm<FormData>({
-    resolver: zodResolver(formSchema),
-    defaultValues: { barcode: '', itemName: '', saleValue: '' },
-  });
+  const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const valueInputRef = useRef<HTMLInputElement>(null);
 
-  const barcodeValue = watch('barcode');
+  // --- Cosmos lookup -------------------------------------------------------
+  const advanceFromCosmos = useCallback((result: CosmosResult) => {
+    if (result.found && result.name) {
+      setItemName(result.name);
+      setNameSource('cosmos');
+      setStep('price');
+      setTimeout(() => valueInputRef.current?.focus(), 150);
+    } else {
+      setNameSource('manual');
+      setStep('name');
+      setTimeout(() => nameInputRef.current?.focus(), 150);
+    }
+  }, []);
 
-  // --- Consulta COSMOS -------------------------------------------------------
-  const consultCosmos = useCallback(
-    async (code: string) => {
-      if (!code || code.length < 4) return;
+  const consultCosmos = useCallback(async (code: string) => {
+    if (!code || code.length < 4) return;
+    setConsulting(true);
+    setCosmosResult(null);
 
-      setConsulting(true);
-      setCosmosResult(null);
-      setValue('itemName', '');
+    try {
+      const res = await fetch(`/api/product/lookup?barcode=${encodeURIComponent(code)}&slug=${slug}`);
+      const data = await res.json();
+      const result: CosmosResult = res.ok ? data : { found: false };
+      setCosmosResult(result);
+      advanceFromCosmos(result);
+    } catch {
+      const result: CosmosResult = { found: false };
+      setCosmosResult(result);
+      advanceFromCosmos(result);
+    } finally {
+      setConsulting(false);
+    }
+  }, [slug, advanceFromCosmos]);
 
-      try {
-        const res = await fetch(
-          `/api/product/lookup?barcode=${encodeURIComponent(code)}&slug=${slug}`
-        );
-        const data = await res.json();
+  // Avança da etapa de código: Enter ou botão Continuar
+  const handleBarcodeNext = useCallback(async () => {
+    if (!barcode.trim()) { setBarcodeError('Informe o código de barras'); return; }
+    setBarcodeError('');
 
-        if (res.ok) {
-          setCosmosResult(data);
-          if (data.found && data.name) {
-            setValue('itemName', data.name);
-            // Foca no campo de valor
-            setTimeout(() => saleValueRef.current?.focus(), 100);
-          } else {
-            // Produto não encontrado — foca no nome
-            setTimeout(() => itemNameRef.current?.focus(), 100);
-          }
-        } else {
-          setCosmosResult({ found: false });
-          setTimeout(() => itemNameRef.current?.focus(), 100);
-        }
-      } catch {
-        setCosmosResult({ found: false });
-      } finally {
-        setConsulting(false);
+    // Resultado cosmos já em cache (usuário voltou) — apenas avança
+    if (cosmosResult !== null) { advanceFromCosmos(cosmosResult); return; }
+
+    // Verifica se código já está cadastrado
+    setConsulting(true);
+    try {
+      const res = await fetch(`/api/barcode/check?slug=${encodeURIComponent(slug)}&barcode=${encodeURIComponent(barcode.trim())}`);
+      const data = await res.json();
+      if (data.exists) {
+        setBarcodeError('Este código de barras já foi cadastrado.');
+        return;
       }
-    },
-    [slug, setValue]
-  );
+    } catch {
+      // Falha na verificação — segue o fluxo normalmente
+    } finally {
+      setConsulting(false);
+    }
 
-  // Debounce ao digitar o código
-  useEffect(() => {
-    if (!barcodeValue) {
-      setCosmosResult(null);
+    // Código curto manual — pula consulta cosmos
+    if (barcodeSource === 'manual' && barcode.length <= 4) {
+      setNameSource('manual');
+      setStep('name');
+      setTimeout(() => nameInputRef.current?.focus(), 150);
       return;
     }
-    if (consultDebounce.current) clearTimeout(consultDebounce.current);
-    consultDebounce.current = setTimeout(() => {
-      consultCosmos(barcodeValue);
-    }, 800);
-    return () => {
-      if (consultDebounce.current) clearTimeout(consultDebounce.current);
-    };
-  }, [barcodeValue, consultCosmos]);
 
-  // --- Leitura de câmera -----------------------------------------------------
-  const handleBarcodeDetected = useCallback(
-    (code: string) => {
-      setScannerActive(false);
-      setValue('barcode', code);
-      consultCosmos(code);
-    },
-    [setValue, consultCosmos]
-  );
+    consultCosmos(barcode);
+  }, [barcode, barcodeSource, cosmosResult, advanceFromCosmos, consultCosmos, nameInputRef, slug]);
 
-  // --- Submissão -------------------------------------------------------------
-  const onSubmit = async (data: FormData) => {
+  // --- Scanner -------------------------------------------------------------
+  const handleBarcodeDetected = useCallback((code: string) => {
+    setScannerActive(false);
+    setScannerTimedOut(false);
+    setBarcodeSource('scan');
+    setBarcode(code);
+    setCosmosResult(null);
+    consultCosmos(code);
+  }, [consultCosmos]);
+
+  const handleScannerTimeout = useCallback(() => {
+    setScannerActive(false);
+    setScannerTimedOut(true);
+  }, []);
+
+  // --- Step navigation -----------------------------------------------------
+  const needsUnitType = barcodeSource === 'manual' && barcode.length <= 4;
+
+  const handleNameNext = () => {
+    if (!itemName.trim()) { setNameError('Nome do item obrigatório'); return; }
+    if (needsUnitType && !unitType) { setUnitTypeError('Selecione o tipo do produto'); return; }
+    setNameError('');
+    setUnitTypeError('');
+    setStep('price');
+    setTimeout(() => valueInputRef.current?.focus(), 150);
+  };
+
+  const handleBackFromName = () => {
+    setStep('barcode');
+    setTimeout(() => barcodeInputRef.current?.focus(), 150);
+  };
+
+  const handleBackFromPrice = () => {
+    if (nameSource === 'manual') {
+      setStep('name');
+      setTimeout(() => nameInputRef.current?.focus(), 150);
+    } else {
+      setStep('barcode');
+      setTimeout(() => barcodeInputRef.current?.focus(), 150);
+    }
+  };
+
+  // --- Save ----------------------------------------------------------------
+  const handleSave = async () => {
+    const raw = saleValue.replace(',', '.').replace(/[^\d.]/g, '');
+    const num = parseFloat(raw);
+    if (!saleValue.trim() || isNaN(num) || num <= 0) {
+      setValueError('Informe um valor válido (ex: 29,90)');
+      return;
+    }
+    setValueError('');
     if (submitting) return;
     setSubmitting(true);
-    setSubmitStatus(null);
-
-    const nameSource = cosmosResult?.found ? 'cosmos' : 'manual';
 
     try {
       const res = await fetch(`/api/barcode/save?slug=${slug}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...data, nameSource }),
+        body: JSON.stringify({ barcode, itemName, saleValue, nameSource, unitType: unitType ?? undefined }),
       });
-
       const result = await res.json();
 
       if (res.ok) {
-        setSubmitStatus({ type: 'success', message: '? Produto cadastrado com sucesso!' });
-        reset();
+        setStep('barcode');
+        setBarcode('');
+        setItemName('');
+        setSaleValue('');
+        setNameSource('manual');
+        setUnitType(null);
+        setBarcodeSource('manual');
         setCosmosResult(null);
         setScannerActive(false);
-        // Recarrega registros recentes
+        setScannerTimedOut(false);
+        setSubmitStatus({ type: 'success', message: 'Produto cadastrado com sucesso!' });
         if (showRecent) loadRecentRecords();
-        setTimeout(() => {
-          setSubmitStatus(null);
-          setFocus('barcode');
-        }, 3000);
+        setTimeout(() => { setSubmitStatus(null); barcodeInputRef.current?.focus(); }, 3000);
       } else {
         setSubmitStatus({ type: 'error', message: result.error || 'Erro ao salvar.' });
       }
@@ -177,85 +210,120 @@ export default function ClientPage({ slug }: Props) {
     }
   };
 
-  // --- Limpar formulário -----------------------------------------------------
-  const handleClear = () => {
-    reset();
-    setCosmosResult(null);
-    setSubmitStatus(null);
-    setScannerActive(false);
-    setFocus('barcode');
+  const handleReset = () => {
+    setStep('barcode');
+    setBarcode(''); setItemName(''); setSaleValue('');
+    setNameSource('manual'); setCosmosResult(null);
+    setUnitType(null); setUnitTypeError(''); setBarcodeSource('manual');
+    setScannerActive(false); setScannerTimedOut(false); setSubmitStatus(null);
+    setBarcodeError(''); setNameError(''); setValueError('');
+    setTimeout(() => barcodeInputRef.current?.focus(), 150);
   };
 
-  // --- Registros recentes ----------------------------------------------------
+  // --- Recent records ------------------------------------------------------
   const loadRecentRecords = useCallback(async () => {
     setRecentLoading(true);
     try {
       const res = await fetch(`/api/barcode/recent?slug=${slug}`);
       const data = await res.json();
       if (res.ok) setRecentRecords(data.records || []);
-    } catch {
-      // silencioso
-    } finally {
-      setRecentLoading(false);
-    }
+    } catch {}
+    finally { setRecentLoading(false); }
   }, [slug]);
 
   const toggleRecent = () => {
     if (!showRecent) loadRecentRecords();
-    setShowRecent((v) => !v);
+    setShowRecent(v => !v);
   };
 
-  // --- Registra o ref do campo itemName para foco programático --------------
-  const { ref: itemNameFormRef, ...itemNameRest } = register('itemName');
-  const { ref: saleValueFormRef, ...saleValueRest } = register('saleValue');
+  // --- Helpers -------------------------------------------------------------
+  const isDone = (s: Step) => STEP_INDEX[step] > STEP_INDEX[s];
+  const isActive = (s: Step) => step === s;
+  const dotClass = (s: Step) => `step-dot${isDone(s) ? ' done' : isActive(s) ? ' active' : ''}`;
+  const labelClass = (s: Step) => `step-label${isDone(s) ? ' done' : isActive(s) ? ' active' : ''}`;
 
   return (
     <>
       <Head>
         <title>Cadastro · {slug}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-        <meta name="description" content={`Cadastro de produtos — ${slug}`} />
       </Head>
 
       <div className="app-wrapper">
         {/* HEADER */}
         <header className="app-header">
-          <div className="app-logo">¦¦</div>
+          <img src="/logo.webp" alt="Logo" className="app-logo-img" />
           <div>
             <div className="app-title">Cadastro de Produtos</div>
             <div className="app-client-name">{slug}</div>
           </div>
         </header>
 
-        {/* ALERTA DE SUCESSO / ERRO GLOBAL */}
+        {/* ALERTA GLOBAL */}
         {submitStatus && (
           <div className={`alert alert-${submitStatus.type}`}>
-            <span className="alert-icon">
-              {submitStatus.type === 'success' ? '?' : '?'}
-            </span>
             <span>{submitStatus.message}</span>
           </div>
         )}
 
-        {/* FORMULÁRIO PRINCIPAL */}
-        <form onSubmit={handleSubmit(onSubmit)} noValidate>
-          <div className="card">
-            <div className="card-title">01 — Código de barras</div>
+        {/* INDICADOR DE ETAPAS */}
+        <div className="steps">
+          <div className="step-item">
+            <div className={dotClass('barcode')}>{isDone('barcode') ? '✓' : '1'}</div>
+            <div className={labelClass('barcode')}>Código</div>
+          </div>
+          <div className={`step-line${isDone('barcode') ? ' done' : ''}`} />
+          <div className="step-item">
+            <div className={dotClass('name')}>{isDone('name') ? '✓' : '2'}</div>
+            <div className={labelClass('name')}>Nome</div>
+          </div>
+          <div className={`step-line${isDone('name') ? ' done' : ''}`} />
+          <div className="step-item">
+            <div className={dotClass('price')}>3</div>
+            <div className={labelClass('price')}>Preço</div>
+          </div>
+        </div>
 
-            {/* Scanner de câmera */}
+        {/* ── ETAPA 1: CÓDIGO DE BARRAS ── */}
+        {step === 'barcode' && (
+          <div className="card">
+            <div className="card-title">Código de barras</div>
+
             {scannerActive && (
-              <BarcodeScanner onDetected={handleBarcodeDetected} active={scannerActive} />
+              <BarcodeScanner
+                onDetected={handleBarcodeDetected}
+                onTimeout={handleScannerTimeout}
+                active={scannerActive}
+              />
             )}
 
-            {/* Campo de código + botão câmera */}
+            {scannerTimedOut && (
+              <div className="product-not-found" style={{ marginBottom: 16 }}>
+                <span className="product-not-found-icon">⚠</span>
+                <div className="product-not-found-text">
+                  Produto não encontrado, digite o código de barras manualmente.
+                </div>
+              </div>
+            )}
+
             <div className="field">
               <label className="field-label">
                 Código <span className="required">*</span>
               </label>
               <div className="input-row">
                 <input
-                  {...register('barcode')}
-                  className={`input ${errors.barcode ? 'input-error' : ''}`}
+                  ref={barcodeInputRef}
+                  className={`input${barcodeError ? ' input-error' : ''}`}
+                  value={barcode}
+                  onChange={e => {
+                    const onlyDigits = e.target.value.replace(/\D/g, '');
+                    setBarcode(onlyDigits);
+                    setBarcodeSource('manual');
+                    setBarcodeError('');
+                    setCosmosResult(null);
+                    setScannerTimedOut(false);
+                  }}
+                  onKeyDown={e => { if (e.key === 'Enter') handleBarcodeNext(); }}
                   placeholder="Ex: 7891234567890"
                   autoComplete="off"
                   inputMode="numeric"
@@ -263,20 +331,21 @@ export default function ClientPage({ slug }: Props) {
                 />
                 <button
                   type="button"
-                  className={`btn btn-icon ${scannerActive ? 'active' : ''}`}
+                  className={`btn btn-icon${scannerActive ? ' active' : ''}`}
+                  onClick={() => { setScannerActive(v => !v); setScannerTimedOut(false); }}
                   title={scannerActive ? 'Fechar câmera' : 'Abrir câmera'}
-                  onClick={() => setScannerActive((v) => !v)}
-                  aria-label="Alternar câmera"
                 >
-                  {scannerActive ? '?' : '??'}
+                  {scannerActive ? '✕' : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                      <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                  )}
                 </button>
               </div>
-              {errors.barcode && (
-                <p className="field-error">? {errors.barcode.message}</p>
-              )}
+              {barcodeError && <p className="field-error">{barcodeError}</p>}
             </div>
 
-            {/* Status COSMOS */}
             {consulting && (
               <div className="consulting-state">
                 <div className="spinner-small" />
@@ -284,113 +353,168 @@ export default function ClientPage({ slug }: Props) {
               </div>
             )}
 
-            {cosmosResult?.found && cosmosResult.name && (
+            {cosmosResult?.found && cosmosResult.name && !consulting && (
               <div className="product-found">
-                <span className="product-found-icon">?</span>
+                <span className="product-found-icon">✓</span>
                 <div>
                   <div className="product-found-name">{cosmosResult.name}</div>
-                  <div className="product-found-sub">Produto encontrado via COSMOS</div>
+                  <div className="product-found-sub">Produto encontrado</div>
                 </div>
               </div>
             )}
 
-            {cosmosResult && !cosmosResult.found && barcodeValue && (
-              <div className="product-not-found">
-                <span className="product-not-found-icon">?</span>
-                <div className="product-not-found-text">
-                  Código não encontrado no COSMOS. Informe o nome manualmente abaixo.
-                </div>
-              </div>
-            )}
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ marginTop: 8 }}
+              onClick={handleBarcodeNext}
+              disabled={consulting || !barcode.trim()}
+            >
+              Continuar →
+            </button>
           </div>
+        )}
 
-          {/* NOME DO ITEM */}
+        {/* ── ETAPA 2: NOME DO ITEM ── */}
+        {step === 'name' && (
           <div className="card">
-            <div className="card-title">02 — Nome do item</div>
+            <div className="card-title">Nome do item</div>
+
+            <div className="summary-field">
+              <span className="summary-field-label">Código</span>
+              <span className="summary-field-value">{barcode}</span>
+            </div>
+
+            {cosmosResult !== null && !cosmosResult.found && (
+              <div className="product-not-found" style={{ marginBottom: 20 }}>
+                <span className="product-not-found-icon">⚠</span>
+                <div className="product-not-found-text">
+                  Código não encontrado. Informe o nome manualmente.
+                </div>
+              </div>
+            )}
+
             <div className="field">
               <label className="field-label">
                 Nome <span className="required">*</span>
-                {cosmosResult?.found && (
-                  <span style={{ color: 'var(--accent-green)', marginLeft: 6, fontWeight: 400 }}>
-                    (preenchido automaticamente)
-                  </span>
-                )}
               </label>
               <input
-                {...itemNameRest}
-                ref={(e) => {
-                  itemNameFormRef(e);
-                  (itemNameRef as React.MutableRefObject<HTMLInputElement | null>).current = e;
-                }}
-                className={`input ${errors.itemName ? 'input-error' : ''} ${
-                  cosmosResult?.found ? 'input-success' : ''
-                }`}
-                placeholder={
-                  cosmosResult?.found
-                    ? 'Nome do produto (COSMOS)'
-                    : 'Digite o nome do produto'
-                }
-                readOnly={cosmosResult?.found === true}
+                ref={nameInputRef}
+                className={`input${nameError ? ' input-error' : ''}`}
+                value={itemName}
+                onChange={e => { setItemName(e.target.value); setNameError(''); }}
+                placeholder="Digite o nome do produto"
+                autoComplete="off"
+                onKeyDown={e => { if (e.key === 'Enter') handleNameNext(); }}
               />
-              {errors.itemName && (
-                <p className="field-error">? {errors.itemName.message}</p>
-              )}
+              {nameError && <p className="field-error">{nameError}</p>}
+            </div>
+
+            {needsUnitType && (
+              <div className="field">
+                <label className="field-label">
+                  Tipo do produto <span className="required">*</span>
+                </label>
+                <div className="unit-type-group">
+                  <button
+                    type="button"
+                    className={`unit-type-btn${unitType === 'kg' ? ' selected' : ''}`}
+                    onClick={() => { setUnitType('kg'); setUnitTypeError(''); }}
+                  >
+                    <span className="unit-type-icon">⚖</span>
+                    <span className="unit-type-label">Produto por quilo</span>
+                    <span className="unit-type-badge">Kg</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`unit-type-btn${unitType === 'un' ? ' selected' : ''}`}
+                    onClick={() => { setUnitType('un'); setUnitTypeError(''); }}
+                  >
+                    <span className="unit-type-icon">📦</span>
+                    <span className="unit-type-label">Produto unitário</span>
+                    <span className="unit-type-badge">Un</span>
+                  </button>
+                </div>
+                {unitTypeError && <p className="field-error">{unitTypeError}</p>}
+              </div>
+            )}
+
+            <button type="button" className="btn btn-primary" onClick={handleNameNext}>
+              Próximo →
+            </button>
+
+            <div className="step-actions">
+              <button type="button" className="step-back" onClick={handleBackFromName}>
+                ← Voltar
+              </button>
+              <button type="button" className="step-cancel" onClick={handleReset}>
+                Cancelar
+              </button>
             </div>
           </div>
+        )}
 
-          {/* VALOR DE VENDA */}
+        {/* ── ETAPA 3: PREÇO ── */}
+        {step === 'price' && (
           <div className="card">
-            <div className="card-title">03 — Valor de venda</div>
+            <div className="card-title">Valor de venda</div>
+
+            <div className="summary-field">
+              <span className="summary-field-label">Código</span>
+              <span className="summary-field-value">{barcode}</span>
+            </div>
+            <div className="summary-field">
+              <span className="summary-field-label">Nome</span>
+              <span className="summary-field-value name">{itemName}</span>
+            </div>
+            {unitType && (
+              <div className="summary-field">
+                <span className="summary-field-label">Tipo</span>
+                <span className="summary-field-value">{unitType === 'kg' ? 'Produto por quilo — Kg' : 'Produto unitário — Un'}</span>
+              </div>
+            )}
+
             <div className="field">
               <label className="field-label">
                 Valor (R$) <span className="required">*</span>
               </label>
               <input
-                {...saleValueRest}
-                ref={(e) => {
-                  saleValueFormRef(e);
-                  (saleValueRef as React.MutableRefObject<HTMLInputElement | null>).current = e;
-                }}
-                className={`input ${errors.saleValue ? 'input-error' : ''}`}
+                ref={valueInputRef}
+                className={`input${valueError ? ' input-error' : ''}`}
+                value={saleValue}
+                onChange={e => { setSaleValue(e.target.value.replace(/[^\d.,]/g, '')); setValueError(''); }}
                 placeholder="Ex: 29,90"
                 inputMode="decimal"
                 autoComplete="off"
+                autoFocus
+                onKeyDown={e => { if (e.key === 'Enter') handleSave(); }}
               />
-              {errors.saleValue && (
-                <p className="field-error">? {errors.saleValue.message}</p>
-              )}
+              {valueError && <p className="field-error">{valueError}</p>}
             </div>
 
             <div className="divider" />
 
-            {/* BOTÕES DE AÇÃO */}
             <button
-              type="submit"
+              type="button"
               className="btn btn-primary"
+              onClick={handleSave}
               disabled={submitting}
             >
               {submitting ? (
-                <>
-                  <div className="spinner" />
-                  Salvando...
-                </>
-              ) : (
-                'Salvar produto'
-              )}
+                <><div className="spinner" /> Salvando...</>
+              ) : 'Salvar produto'}
             </button>
 
-            <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={handleClear}
-                disabled={submitting}
-              >
-                Limpar formulário
+            <div className="step-actions">
+              <button type="button" className="step-back" onClick={handleBackFromPrice} disabled={submitting}>
+                ← Voltar
+              </button>
+              <button type="button" className="step-cancel" onClick={handleReset} disabled={submitting}>
+                Cancelar
               </button>
             </div>
           </div>
-        </form>
+        )}
 
         {/* REGISTROS RECENTES */}
         <div style={{ marginTop: 8 }}>
@@ -399,38 +523,23 @@ export default function ClientPage({ slug }: Props) {
               type="button"
               onClick={toggleRecent}
               style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-dim)',
-                fontFamily: 'var(--mono)',
-                fontSize: '11px',
-                fontWeight: 500,
-                letterSpacing: '0.12em',
-                textTransform: 'uppercase',
-                cursor: 'pointer',
-                padding: 0,
+                background: 'none', border: 'none', color: 'var(--text-dim)',
+                fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 500,
+                letterSpacing: '0.12em', textTransform: 'uppercase', cursor: 'pointer', padding: 0,
               }}
             >
-              {showRecent ? '?' : '?'} Últimos cadastros
+              {showRecent ? '▲' : '▼'} Últimos cadastros
             </button>
           </div>
-
-          {showRecent && (
-            <RecentRecords records={recentRecords} loading={recentLoading} />
-          )}
+          {showRecent && <RecentRecords records={recentRecords} loading={recentLoading} />}
         </div>
       </div>
     </>
   );
 }
 
-// --- Server-side: valida se o slug tem formato válido ------------------------
 export const getServerSideProps: GetServerSideProps = async ({ params }) => {
   const slug = params?.slug as string;
-
-  if (!slugIsAcceptable(slug)) {
-    return { notFound: true };
-  }
-
+  if (!slugIsAcceptable(slug)) return { notFound: true };
   return { props: { slug } };
 };
