@@ -138,28 +138,32 @@ export async function saveRecord(params: SaveRecordParams): Promise<void> {
 
 export async function getRecentRecords(
   spreadsheetId: string,
-  limit = 10,
-  tabName: string
-): Promise<Record<string, string>[]> {
+  tabName: string,
+  page = 1,
+  pageSize = 25,
+): Promise<{ records: Record<string, string>[]; total: number }> {
   const sheets = getSheetsClient();
   await ensureSheetReady(sheets, spreadsheetId, tabName);
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${tabName}!A:F`,
+    range: `${tabName}!A:H`,
   });
 
   const rows = res.data.values ?? [];
-  if (rows.length <= 1) return [];
+  if (rows.length <= 1) return { records: [], total: 0 };
 
   const headers = rows[0];
-  const data = rows.slice(1).reverse().slice(0, limit);
+  const allData = rows.slice(1).reverse();
+  const total = allData.length;
+  const start = (page - 1) * pageSize;
+  const pageData = allData.slice(start, start + pageSize);
 
-  return data.map((row) => {
+  const records = pageData.map((row) => {
     const obj: Record<string, string> = {};
-    headers.forEach((h, i) => {
-      obj[h] = row[i] ?? '';
-    });
+    headers.forEach((h, i) => { obj[h] = row[i] ?? ''; });
     return obj;
   });
+
+  return { records, total };
 }

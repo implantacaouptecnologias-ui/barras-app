@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import type { GetServerSideProps } from 'next';
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
@@ -52,6 +52,9 @@ export default function ClientPage({ slug }: Props) {
   const [showRecent, setShowRecent] = useState(false);
   const [recentRecords, setRecentRecords] = useState<RecentRecord[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
+  const [recentPage, setRecentPage] = useState(1);
+  const [recentTotal, setRecentTotal] = useState(0);
+  const PAGE_SIZE = 25;
 
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -200,7 +203,7 @@ export default function ClientPage({ slug }: Props) {
         setScannerActive(false);
         setScannerTimedOut(false);
         setSubmitStatus({ type: 'success', message: 'Produto cadastrado com sucesso!' });
-        if (showRecent) loadRecentRecords();
+        if (showRecent) loadRecentRecords(1);
         setTimeout(() => { setSubmitStatus(null); barcodeInputRef.current?.focus(); }, 3000);
       } else {
         setSubmitStatus({ type: 'error', message: result.error || 'Erro ao salvar.' });
@@ -223,18 +226,22 @@ export default function ClientPage({ slug }: Props) {
   };
 
   // --- Recent records ------------------------------------------------------
-  const loadRecentRecords = useCallback(async () => {
+  const loadRecentRecords = useCallback(async (page = 1) => {
     setRecentLoading(true);
     try {
-      const res = await fetch(`/api/barcode/recent?slug=${slug}`);
+      const res = await fetch(`/api/barcode/recent?slug=${slug}&page=${page}`);
       const data = await res.json();
-      if (res.ok) setRecentRecords(data.records || []);
+      if (res.ok) {
+        setRecentRecords(data.records || []);
+        setRecentTotal(data.total ?? 0);
+        setRecentPage(page);
+      }
     } catch {}
     finally { setRecentLoading(false); }
   }, [slug]);
 
   const toggleRecent = () => {
-    if (!showRecent) loadRecentRecords();
+    if (!showRecent) loadRecentRecords(1);
     setShowRecent(v => !v);
   };
 
@@ -535,7 +542,16 @@ export default function ClientPage({ slug }: Props) {
               {showRecent ? '▲' : '▼'} Últimos cadastros
             </button>
           </div>
-          {showRecent && <RecentRecords records={recentRecords} loading={recentLoading} />}
+          {showRecent && (
+            <RecentRecords
+              records={recentRecords}
+              loading={recentLoading}
+              total={recentTotal}
+              page={recentPage}
+              pageSize={PAGE_SIZE}
+              onPageChange={(p) => loadRecentRecords(p)}
+            />
+          )}
         </div>
       </div>
     </>

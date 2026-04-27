@@ -716,6 +716,62 @@ body {
   text-transform: uppercase;
 }
 
+/* ─── RECENT FOOTER ──────────────────────── */
+.recent-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  gap: 12px;
+}
+
+.recent-total {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.recent-pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.recent-page-btn {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.recent-page-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.recent-page-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.recent-page-info {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 40px;
+  text-align: center;
+}
+
 /* ─── DIVIDER ─────────────────────────────── */
 .divider {
   height: 1px;

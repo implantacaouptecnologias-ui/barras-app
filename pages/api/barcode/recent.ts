@@ -29,15 +29,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Slug inválido' });
   }
 
+  const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+  const PAGE_SIZE = 25;
+
   try {
     const { getSpreadsheetIdForSlug } = await import('@/lib/registry');
     const client = await getSpreadsheetIdForSlug(slug);
     if (!client) {
-      return res.status(200).json({ records: [] });
+      return res.status(200).json({ records: [], total: 0, page: 1, pageSize: PAGE_SIZE });
     }
 
-    const records = await getRecentRecords(client.spreadsheetId, 15, client.tabName);
-    return res.status(200).json({ records });
+    const { records, total } = await getRecentRecords(client.spreadsheetId, client.tabName, page, PAGE_SIZE);
+    return res.status(200).json({ records, total, page, pageSize: PAGE_SIZE });
   } catch (err) {
     console.error('[api/barcode/recent]', err);
     return res.status(500).json({ error: 'Erro ao buscar registros' });
