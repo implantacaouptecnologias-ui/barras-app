@@ -73,7 +73,6 @@ export default function ClientPage({ slug }: Props) {
       .then(r => r.json())
       .then(data => {
         if (cancelled) return;
-        console.log('[confirm] lookup response:', data);
         if (data.thumbnail) setProductImage(data.thumbnail);
         if (data.ncm) setCosmosResult(prev => ({ found: prev?.found ?? true, name: prev?.name, ncm: data.ncm }));
       })

@@ -66,13 +66,6 @@ export async function lookupProduct(barcode: string): Promise<CosmosProduct> {
 
     const data = await res.json();
 
-    console.log('[cosmos] thumbnail fields:', {
-      thumbnail: data?.thumbnail,
-      image: data?.image,
-      photo: data?.photo,
-      keys: Object.keys(data ?? {}),
-    });
-
     // A API COSMOS retorna o produto com campo "description" como nome
     const name =
       data?.description ||
