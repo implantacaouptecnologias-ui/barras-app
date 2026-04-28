@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { GetServerSideProps } from 'next';
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
@@ -7,7 +7,7 @@ import RecentRecords from '@/components/RecentRecords';
 
 const BarcodeScanner = dynamic(() => import('@/components/BarcodeScanner'), { ssr: false });
 
-type Step = 'barcode' | 'name' | 'price';
+type Step = 'barcode' | 'name' | 'price' | 'confirm';
 
 interface CosmosResult {
   found: boolean;
@@ -25,7 +25,7 @@ interface RecentRecord {
 
 interface Props { slug: string; }
 
-const STEP_INDEX: Record<Step, number> = { barcode: 0, name: 1, price: 2 };
+const STEP_INDEX: Record<Step, number> = { barcode: 0, name: 1, price: 2, confirm: 3 };
 
 export default function ClientPage({ slug }: Props) {
   const [step, setStep] = useState<Step>('barcode');
@@ -49,6 +49,9 @@ export default function ClientPage({ slug }: Props) {
   const [submitStatus, setSubmitStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const [productImage, setProductImage] = useState<string | null>(null);
+  const [imageLoading, setImageLoading] = useState(false);
+
   const [showRecent, setShowRecent] = useState(false);
   const [recentRecords, setRecentRecords] = useState<RecentRecord[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
@@ -59,6 +62,26 @@ export default function ClientPage({ slug }: Props) {
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const valueInputRef = useRef<HTMLInputElement>(null);
+
+  // --- Busca de imagem na etapa de revisão ---------------------------------
+  useEffect(() => {
+    if (step !== 'confirm' || barcode.length < 8) return;
+    let cancelled = false;
+    setProductImage(null);
+    setImageLoading(true);
+    fetch(`/api/product/lookup?barcode=${encodeURIComponent(barcode)}&slug=${slug}`)
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return;
+        console.log('[confirm] lookup response:', data);
+        if (data.thumbnail) setProductImage(data.thumbnail);
+        if (data.ncm) setCosmosResult(prev => ({ found: prev?.found ?? true, name: prev?.name, ncm: data.ncm }));
+      })
+      .catch(err => { console.error('[confirm] fetch error:', err); })
+      .finally(() => { if (!cancelled) setImageLoading(false); });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, barcode, slug]);
 
   // --- Cosmos lookup -------------------------------------------------------
   const advanceFromCosmos = useCallback((result: CosmosResult) => {
@@ -171,6 +194,22 @@ export default function ClientPage({ slug }: Props) {
     }
   };
 
+  const handlePriceNext = () => {
+    const raw = saleValue.replace(',', '.').replace(/[^\d.]/g, '');
+    const num = parseFloat(raw);
+    if (!saleValue.trim() || isNaN(num) || num <= 0) {
+      setValueError('Informe um valor válido (ex: 29,90)');
+      return;
+    }
+    setValueError('');
+    setStep('confirm');
+  };
+
+  const handleBackFromConfirm = () => {
+    setStep('price');
+    setTimeout(() => valueInputRef.current?.focus(), 150);
+  };
+
   // --- Save ----------------------------------------------------------------
   const handleSave = async () => {
     const raw = saleValue.replace(',', '.').replace(/[^\d.]/g, '');
@@ -202,6 +241,7 @@ export default function ClientPage({ slug }: Props) {
         setCosmosResult(null);
         setScannerActive(false);
         setScannerTimedOut(false);
+        setProductImage(null);
         setSubmitStatus({ type: 'success', message: 'Produto cadastrado com sucesso!' });
         if (showRecent) loadRecentRecords(1);
         setTimeout(() => { setSubmitStatus(null); barcodeInputRef.current?.focus(); }, 3000);
@@ -221,7 +261,7 @@ export default function ClientPage({ slug }: Props) {
     setNameSource('manual'); setCosmosResult(null);
     setUnitType(null); setUnitTypeError(''); setBarcodeSource('manual');
     setScannerActive(false); setScannerTimedOut(false); setSubmitStatus(null);
-    setBarcodeError(''); setNameError(''); setValueError('');
+    setBarcodeError(''); setNameError(''); setValueError(''); setProductImage(null);
     setTimeout(() => barcodeInputRef.current?.focus(), 150);
   };
 
@@ -288,8 +328,13 @@ export default function ClientPage({ slug }: Props) {
           </div>
           <div className={`step-line${isDone('name') ? ' done' : ''}`} />
           <div className="step-item">
-            <div className={dotClass('price')}>3</div>
+            <div className={dotClass('price')}>{isDone('price') ? '✓' : '3'}</div>
             <div className={labelClass('price')}>Preço</div>
+          </div>
+          <div className={`step-line${isDone('price') ? ' done' : ''}`} />
+          <div className="step-item">
+            <div className={dotClass('confirm')}>4</div>
+            <div className={labelClass('confirm')}>Revisar</div>
           </div>
         </div>
 
@@ -498,6 +543,117 @@ export default function ClientPage({ slug }: Props) {
                 inputMode="decimal"
                 autoComplete="off"
                 autoFocus
+                onKeyDown={e => { if (e.key === 'Enter') handlePriceNext(); }}
+              />
+              {valueError && <p className="field-error">{valueError}</p>}
+            </div>
+
+            <div className="divider" />
+
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handlePriceNext}
+            >
+              Revisar →
+            </button>
+
+            <div className="step-actions">
+              <button type="button" className="step-back" onClick={handleBackFromPrice}>
+                ← Voltar
+              </button>
+              <button type="button" className="step-cancel" onClick={handleReset}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── ETAPA 4: REVISAR E CONFIRMAR ── */}
+        {step === 'confirm' && (
+          <div className="card">
+            <div className="card-title">Revisar e confirmar</div>
+
+            {imageLoading && (
+              <div className="consulting-state">
+                <div className="spinner-small" />
+                <span>Buscando imagem do produto...</span>
+              </div>
+            )}
+
+            {productImage && !imageLoading && (
+              <div className="product-image-wrapper">
+                <img
+                  src={`/api/product/image?url=${encodeURIComponent(productImage)}`}
+                  alt={itemName}
+                  className="product-image"
+                  onError={e => { (e.currentTarget as HTMLImageElement).parentElement!.style.display = 'none'; }}
+                />
+              </div>
+            )}
+
+            <div className="field">
+              <label className="field-label">Código de barras</label>
+              <input
+                className={`input${barcodeError ? ' input-error' : ''}`}
+                value={barcode}
+                onChange={e => {
+                  setBarcode(e.target.value.replace(/\D/g, '').slice(0, 13));
+                  setBarcodeError('');
+                }}
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={13}
+              />
+              {barcodeError && <p className="field-error">{barcodeError}</p>}
+            </div>
+
+            <div className="field">
+              <label className="field-label">Nome do produto</label>
+              <input
+                className={`input${nameError ? ' input-error' : ''}`}
+                value={itemName}
+                onChange={e => { setItemName(e.target.value.slice(0, 60)); setNameError(''); }}
+                autoComplete="off"
+                maxLength={60}
+              />
+              {nameError && <p className="field-error">{nameError}</p>}
+            </div>
+
+            {needsUnitType && (
+              <div className="field">
+                <label className="field-label">Tipo do produto</label>
+                <div className="unit-type-group">
+                  <button
+                    type="button"
+                    className={`unit-type-btn${unitType === 'kg' ? ' selected' : ''}`}
+                    onClick={() => setUnitType('kg')}
+                  >
+                    <span className="unit-type-icon">⚖</span>
+                    <span className="unit-type-label">Produto por quilo</span>
+                    <span className="unit-type-badge">Kg</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`unit-type-btn${unitType === 'un' ? ' selected' : ''}`}
+                    onClick={() => setUnitType('un')}
+                  >
+                    <span className="unit-type-icon">📦</span>
+                    <span className="unit-type-label">Produto unitário</span>
+                    <span className="unit-type-badge">Un</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="field">
+              <label className="field-label">Valor de venda (R$)</label>
+              <input
+                className={`input${valueError ? ' input-error' : ''}`}
+                value={saleValue}
+                onChange={e => { setSaleValue(e.target.value.replace(/[^\d.,]/g, '')); setValueError(''); }}
+                inputMode="decimal"
+                autoComplete="off"
                 onKeyDown={e => { if (e.key === 'Enter') handleSave(); }}
               />
               {valueError && <p className="field-error">{valueError}</p>}
@@ -517,7 +673,7 @@ export default function ClientPage({ slug }: Props) {
             </button>
 
             <div className="step-actions">
-              <button type="button" className="step-back" onClick={handleBackFromPrice} disabled={submitting}>
+              <button type="button" className="step-back" onClick={handleBackFromConfirm} disabled={submitting}>
                 ← Voltar
               </button>
               <button type="button" className="step-cancel" onClick={handleReset} disabled={submitting}>

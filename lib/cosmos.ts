@@ -66,6 +66,13 @@ export async function lookupProduct(barcode: string): Promise<CosmosProduct> {
 
     const data = await res.json();
 
+    console.log('[cosmos] thumbnail fields:', {
+      thumbnail: data?.thumbnail,
+      image: data?.image,
+      photo: data?.photo,
+      keys: Object.keys(data ?? {}),
+    });
+
     // A API COSMOS retorna o produto com campo "description" como nome
     const name =
       data?.description ||
@@ -83,7 +90,7 @@ export async function lookupProduct(barcode: string): Promise<CosmosProduct> {
       name: String(name).trim(),
       brand: data?.brand?.name || data?.brand || undefined,
       description: data?.description || undefined,
-      thumbnail: data?.thumbnail || undefined,
+      thumbnail: data?.thumbnail || data?.image || data?.photo || undefined,
       ncm: data?.ncm?.code ? String(data.ncm.code) : undefined,
     };
   } catch (err: unknown) {
